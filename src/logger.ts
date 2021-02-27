@@ -15,6 +15,18 @@
 import * as express from 'express';
 import {FUNCTION_STATUS_HEADER_FIELD} from './types';
 
+export const logExecutionStarted = () => {
+  console.log('Function execution started');
+};
+export const logExecutionFinished = (
+  durationMs: number,
+  statusCode: number
+) => {
+  console.log(
+    `Function execution took ${durationMs} ms, finished with status code: ${statusCode}`
+  );
+};
+
 /**
  * Logs an error message and sends back an error response to the incoming
  * request.

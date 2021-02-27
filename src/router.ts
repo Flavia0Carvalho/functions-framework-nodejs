@@ -14,6 +14,7 @@
 import * as express from 'express';
 import * as onFinished from 'on-finished';
 import {HandlerFunction} from './functions';
+import {logExecutionStarted, logExecutionFinished} from './logger';
 import {SignatureType} from './types';
 import {
   makeHttpHandler,
@@ -39,6 +40,7 @@ export function registerFunctionRoutes(
   userFunction: HandlerFunction,
   functionSignatureType: SignatureType
 ) {
+  // Setup Express app HTTP handlers
   if (functionSignatureType === SignatureType.HTTP) {
     app.use('/favicon.ico|/robots.txt', (req, res) => {
       // Neither crawlers nor browsers attempting to pull the icon find the body
@@ -54,24 +56,47 @@ export function registerFunctionRoutes(
     });
 
     app.all('/*', (req, res, next) => {
-      const handler = makeHttpHandler(userFunction as HttpFunction);
-      handler(req, res, next);
+      const handler: express.RequestHandler = makeHttpHandler(userFunction as HttpFunction);
+      executeHandler(handler, req, res, next);
     });
   } else if (functionSignatureType === SignatureType.EVENT) {
     app.post('/*', (req, res, next) => {
       const wrappedUserFunction = wrapEventFunction(
         userFunction as EventFunction | EventFunctionWithCallback
       );
-      const handler = makeHttpHandler(wrappedUserFunction);
-      handler(req, res, next);
+      const handler: express.RequestHandler = makeHttpHandler(wrappedUserFunction);
+      executeHandler(handler, req, res, next);
     });
   } else {
     app.post('/*', (req, res, next) => {
       const wrappedUserFunction = wrapCloudEventFunction(
         userFunction as CloudEventFunction | CloudEventFunctionWithCallback
       );
-      const handler = makeHttpHandler(wrappedUserFunction);
-      handler(req, res, next);
+      const handler: express.RequestHandler = makeHttpHandler(wrappedUserFunction);
+      executeHandler(handler, req, res, next);
     });
   }
 }
+
+/**
+ * Executes an Express handler. Logs execution start and end.
+ */
+async function executeHandler(
+  handler: express.RequestHandler,
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  // Don't log execution time on GCF (cloudfunctions.net)
+  const SHOULD_LOG_EXECUTION_TIME = req.headers.host !== 'cloudfunctions.net';
+  if (SHOULD_LOG_EXECUTION_TIME) {
+    const hrstart = process.hrtime();
+    logExecutionStarted();
+    await handler(req, res, next);
+    const hrend = process.hrtime(hrstart);
+    logExecutionFinished(hrend[1] / 1_000_000, res.statusCode);
+  } else {
+    // Just execute without logging
+    await handler(req, res, next);
+  }
+};
