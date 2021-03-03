@@ -14,10 +14,9 @@
 import * as express from 'express';
 import * as onFinished from 'on-finished';
 import {HandlerFunction} from './functions';
-import {logExecutionStarted, logExecutionFinished} from './logger';
 import {SignatureType} from './types';
 import {
-  makeHttpHandler,
+  handleHttpRequest,
   wrapEventFunction,
   wrapCloudEventFunction,
 } from './invoker';
@@ -55,48 +54,22 @@ export function registerFunctionRoutes(
       next();
     });
 
-    app.all('/*', (req, res, next) => {
-      const handler: express.RequestHandler = makeHttpHandler(userFunction as HttpFunction);
-      executeHandler(handler, req, res, next);
+    app.all('/*', async (req, res, next) => {
+      handleHttpRequest(req, res, next, userFunction as HttpFunction);
     });
   } else if (functionSignatureType === SignatureType.EVENT) {
-    app.post('/*', (req, res, next) => {
+    app.post('/*', async (req, res, next) => {
       const wrappedUserFunction = wrapEventFunction(
         userFunction as EventFunction | EventFunctionWithCallback
       );
-      const handler: express.RequestHandler = makeHttpHandler(wrappedUserFunction);
-      executeHandler(handler, req, res, next);
+      handleHttpRequest(req, res, next, wrappedUserFunction);
     });
   } else {
-    app.post('/*', (req, res, next) => {
+    app.post('/*', async (req, res, next) => {
       const wrappedUserFunction = wrapCloudEventFunction(
         userFunction as CloudEventFunction | CloudEventFunctionWithCallback
       );
-      const handler: express.RequestHandler = makeHttpHandler(wrappedUserFunction);
-      executeHandler(handler, req, res, next);
+      handleHttpRequest(req, res, next, wrappedUserFunction);
     });
   }
 }
-
-/**
- * Executes an Express handler. Logs execution start and end.
- */
-async function executeHandler(
-  handler: express.RequestHandler,
-  req: express.Request,
-  res: express.Response,
-  next: express.NextFunction
-) {
-  // Don't log execution time on GCF (cloudfunctions.net)
-  const SHOULD_LOG_EXECUTION_TIME = req.headers.host !== 'cloudfunctions.net';
-  if (SHOULD_LOG_EXECUTION_TIME) {
-    const hrstart = process.hrtime();
-    logExecutionStarted();
-    await handler(req, res, next);
-    const hrend = process.hrtime(hrstart);
-    logExecutionFinished(hrend[1] / 1_000_000, res.statusCode);
-  } else {
-    // Just execute without logging
-    await handler(req, res, next);
-  }
-};

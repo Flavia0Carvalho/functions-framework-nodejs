@@ -24,6 +24,7 @@
 import * as domain from 'domain';
 import * as express from 'express';
 import * as http from 'http';
+import {logExecutionStarted, logExecutionFinished} from './logger';
 import {FUNCTION_STATUS_HEADER_FIELD} from './types';
 import {sendCrashResponse} from './logger';
 import {isBinaryCloudEvent, getBinaryCloudEventContext} from './cloudevents';
@@ -95,26 +96,53 @@ function sendResponse(result: any, err: Error | null, res: express.Response) {
 /**
  * Wraps the provided function into an Express handler function with additional
  * instrumentation logic.
- * @param execute Runs user's function.
+ * @param usersFunction Runs user's function.
  * @return An Express handler function.
  */
-export function makeHttpHandler(execute: HttpFunction): express.RequestHandler {
-  return (req: express.Request, res: express.Response) => {
-    const d = domain.create();
-    // Catch unhandled errors originating from this request.
-    d.on('error', err => {
+export function handleHttpRequest(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction,
+  usersFunction: HttpFunction): express.RequestHandler {
+  return async (req: express.Request, res: express.Response) => {
+    // TODO: Is this correct?
+    // Convert users function to a Promise (if not already)
+    const userFunctionPromise = Promise.resolve(usersFunction);
+
+    console.log('123');
+    console.log(usersFunction);
+    console.log(typeof usersFunction);
+    console.log('223');
+
+    try {
+      // Don't log execution time on GCF (cloudfunctions.net)
+      const SHOULD_LOG_EXECUTION_TIME = req.headers.host !== 'cloudfunctions.net';
+      if (SHOULD_LOG_EXECUTION_TIME) {
+        // Use process.hrtime to measure time in nanoseconds
+        // https://nodejs.org/api/process.html#process_process_hrtime_time
+        const NS_PER_SEC = 1e9;
+        const hrstart = process.hrtime();
+        console.log('hrstart', hrstart);
+        logExecutionStarted();
+        (await userFunctionPromise)(req, res);
+        const hrend = process.hrtime(hrstart);
+        console.log('hrend', hrend);
+        const ns = hrend[0] * NS_PER_SEC + hrend[1];
+        // Convert nanoseconds to milliseconds
+        logExecutionFinished(Math.ceil(ns / 1_000), res.statusCode);
+      } else {
+        // Just execute without logging
+        (await userFunctionPromise)(req, res);
+      }
+    } catch (err) {
+      // Catch unhandled errors originating from this request.
       if (res.locals.functionExecutionFinished) {
         console.error(`Exception from a finished function: ${err}`);
       } else {
         res.locals.functionExecutionFinished = true;
         sendCrashResponse({err, res});
       }
-    });
-    d.run(() => {
-      process.nextTick(() => {
-        execute(req, res);
-      });
-    });
+    }
   };
 }
 
